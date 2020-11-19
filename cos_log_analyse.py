@@ -14,34 +14,27 @@ parser.add_argument("-f", help="Local File Path", action="store")
 parser.add_argument("-prefix", help="COS Bucket Prefix", action="store")
 parser.add_argument("-csv", help="Save Log File", action='store_true')
 parser.add_argument("-e", help="COS Event Name", action='store')
-parser.add_argument("-op",
-                    help="Fuzzy Match Operations of URL",
-                    action='store')
+parser.add_argument("-op", help="Fuzzy Match Operations of URL", action='store')
 parser.add_argument("-u", help="Retrieve URLs In/Out Flow", action='store')
 args = parser.parse_args()
 config = ConfigParser()
 config.read('config.ini')
 COS_CONFIG = config['common'] if config.sections() else None
 TABLE_HEADER = [
-    'eventVersion', 'bucketName', 'qcsRegion', 'eventTime', 'eventSource',
-    'eventName', 'remoteIp', 'userSecretKeyId', 'reservedFiled',
-    'reqBytesSent', 'deltaDataSize', 'reqPath', 'reqMethod', 'userAgent',
-    'resHttpCode', 'resErrorCode', 'resErrorMsg', 'resBytesSent',
-    'resTotalTime', 'logSourceType', 'storageClass', 'accountId',
-    'resTurnAroundTime', 'requester', 'requestId', 'objectSize', 'versionId',
-    'targetStorageClass', 'referer', 'requestUri'
+    'eventVersion', 'bucketName', 'qcsRegion', 'eventTime', 'eventSource', 'eventName', 'remoteIp',
+    'userSecretKeyId', 'reservedFiled', 'reqBytesSent', 'deltaDataSize', 'reqPath', 'reqMethod',
+    'userAgent', 'resHttpCode', 'resErrorCode', 'resErrorMsg', 'resBytesSent', 'resTotalTime',
+    'logSourceType', 'storageClass', 'accountId', 'resTurnAroundTime', 'requester', 'requestId',
+    'objectSize', 'versionId', 'targetStorageClass', 'referer', 'requestUri'
 ]
 event_name = args.e if args.e else None
 log_tmp_folder = 'log_tmp'
 out_file_name = '{}.csv'.format(time.strftime("%m%d-%H%M%S", time.localtime()))
-out_csv_file_name = args.prefix.split(
-    '/')[0] + '-' + out_file_name if args.prefix else None
+out_csv_file_name = args.prefix.split('/')[0] + '-' + out_file_name if args.prefix else None
 result_frame = pd.DataFrame(columns=TABLE_HEADER)
-single_url = (lambda x: unquote(x, 'utf-8')
-              if x.startswith('/') else unquote(('/' + x), 'utf-8'))
+single_url = (lambda x: unquote(x, 'utf-8'))
 single_url_ops = [
-    lambda x, y, z: single_url_operation_record(x, y, z),
-    lambda x, y: single_url_analysis(x, y)
+    lambda x, y, z: single_url_operation_record(x, y, z), lambda x, y: single_url_analysis(x, y)
 ]
 
 
@@ -49,6 +42,21 @@ def utc_to_local(utc_time_str):
     utc_date = datetime.datetime.strptime(utc_time_str, "%Y-%m-%dT%H:%M:%SZ")
     local_date = utc_date + datetime.timedelta(hours=8)
     return (datetime.datetime.strftime(local_date, '%Y-%m-%d %H:%M:%S'))
+
+
+def is_date_format(str):
+    try:
+        datetime.datetime.strptime(str.split('_')[0], '%Y%m%d%H%M')
+    except ValueError:
+        return False
+    return True
+
+
+def prefix_format(str, start=False, end=False):
+    if start:
+        return str if str.startswith('/') else '/' + str
+    if end:
+        return str if str.endswith('/') else str + '/'
 
 
 def convert_flow_size(size):
@@ -73,20 +81,14 @@ def Read_log(local_path, LocalMarker=False):
     if LocalMarker:
         data = pd.read_csv(local_path, names=TABLE_HEADER)
     else:
-        data = pd.read_table(local_path,
-                             sep=' ',
-                             header=None,
-                             names=TABLE_HEADER)
-        data['reqPath'] = data['reqPath'].apply(lambda x:
-                                                (unquote(x, 'utf-8')))
-        data['eventTime'] = data['eventTime'].apply(lambda x:
-                                                    (utc_to_local(x)))
+        data = pd.read_table(local_path, sep=' ', header=None, names=TABLE_HEADER)
+        data['reqPath'] = data['reqPath'].apply(lambda x: (unquote(x, 'utf-8')))
+        data['eventTime'] = data['eventTime'].apply(lambda x: (utc_to_local(x)))
     return data
 
 
 def download_folder(cos_path, local_path):
-    if cos_path.endswith('/') is False:
-        cos_path += '/'
+    cos_path = prefix_format(cos_path, end=True)
     cos_config = CosConfig(Region=COS_CONFIG['region'],
                            SecretId=COS_CONFIG['secret_id'],
                            SecretKey=COS_CONFIG['secret_key'])
@@ -110,11 +112,10 @@ def download_folder(cos_path, local_path):
                 local_filenames = os.listdir(local_path)
                 filename = file['Key'].split('/')[-1]
                 local_file_path = '{}/{}'.format(local_path, filename)
-                file_list.append(local_file_path)
-                if filename not in local_filenames:
-                    response = cos_client.get_object(
-                        Bucket=COS_CONFIG['bucket'], Key=file['Key'])
+                if filename not in local_filenames and is_date_format(filename):
+                    response = cos_client.get_object(Bucket=COS_CONFIG['bucket'], Key=file['Key'])
                     response['Body'].get_stream_to_file(local_file_path)
+                    file_list.append(local_file_path)
         except Exception as e:
             return -1
     return file_list
@@ -123,9 +124,8 @@ def download_folder(cos_path, local_path):
 def single_url_operation_record(frame, urlpath, event):
     operation_frame = frame[frame['reqPath'].str.contains(urlpath, regex=False)
                             & frame['eventName'].str.lower().str.contains(
-                                event.lower())] if event else frame[
-                                    frame['reqPath'].str.contains(urlpath,
-                                                                  regex=False)]
+                                event.lower())] if event else frame[frame['reqPath'].str.contains(
+                                    urlpath, regex=False)]
     return operation_frame
 
 
@@ -140,13 +140,12 @@ def single_url_analysis(frame, urlpath):
 def main():
     global result_frame
     tmpFrame = pd.DataFrame()
-    op_reqpath = args.op if args.op else None
-    u_reqpath = single_url(args.u) if args.u else None
+    op_reqpath = single_url(args.op) if args.op else None
+    u_reqpath = single_url(prefix_format(args.u, start=True)) if args.u else None
     if args.f:
         result_frame = Read_log(args.f, LocalMarker=True)
         if args.op:
-            result_frame = single_url_ops[0](result_frame, op_reqpath,
-                                             event_name)
+            result_frame = single_url_ops[0](result_frame, op_reqpath, event_name)
         if args.u:
             result_frame = single_url_ops[1](result_frame, u_reqpath)
     else:
@@ -155,16 +154,12 @@ def main():
             for file in local_file_list:
                 dataFrame = Read_log(file)
                 if args.op:
-                    tmpFrame = single_url_ops[0](dataFrame, op_reqpath,
-                                                 event_name)
+                    tmpFrame = single_url_ops[0](dataFrame, op_reqpath, event_name)
                 if args.u:
                     tmpFrame = single_url_ops[1](dataFrame, u_reqpath)
                 result_frame = pd.concat([result_frame, tmpFrame], axis=0)
                 if args.csv:
-                    dataFrame.to_csv(out_csv_file_name,
-                                     index=False,
-                                     header=False,
-                                     mode='a')
+                    dataFrame.to_csv(out_csv_file_name, index=False, header=False, mode='a')
         result_frame.sort_values(by='eventTime', ascending=True, inplace=True)
     if args.op:
         result_frame.to_csv(out_file_name, index=False)
@@ -173,10 +168,8 @@ def main():
     if args.u:
         print('需要检索的 URL: {}'.format(args.u))
         print('1: URL 总请求量: {}'.format(result_frame.shape[0]))
-        print('2: URL 总出流量: {}'.format(
-            convert_flow_size(result_frame['resBytesSent'].sum())))
-        print('3. URL 总入流量: {}'.format(
-            convert_flow_size(result_frame['reqBytesSent'].sum())))
+        print('2: URL 总出流量: {}'.format(convert_flow_size(result_frame['resBytesSent'].sum())))
+        print('3. URL 总入流量: {}'.format(convert_flow_size(result_frame['reqBytesSent'].sum())))
 
 
 if __name__ == '__main__':
